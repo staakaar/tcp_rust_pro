@@ -20,12 +20,58 @@ pub struct Socket {
     pub local_port: u16,
     pub remote_port: u16,
     pub sender: TransportSender,
+    pub send_param: SendParam,
+    pub recv_param: RecvParam,
+    pub status: TcpStatus,
 }
 
-pub enum TcpStatus {}
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum TcpStatus {
+    Listen,
+    SynSent,
+    SynRcvd,
+    Established,
+    FinWait1,
+    FinWait2,
+    TimeWait,
+    CloseWait,
+    LastAck,
+}
+
+impl Display for TacpStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TcpStatus::Listen => write!(f, "LISTEN"),
+            TCPStatus::SynSent => write!(f, "SYNSENT"),
+            TCPStatus::SynRcvd => write!(f, "SYNRCVD"),
+            TCPStatus::Established => write!(f, "ESTABLISHED"),
+            TCPStatus::FinWait1 => write!(f, "FINWAIT1"),
+            TCPStatus::FinWait2 => write!(f, "FINWAIT2"),
+            TCPStatus::TimeWait => write!(f, "TIMEWAIT"),
+            TcpStatus::CloseWait => write!(f, "CLOSEWAIT"),
+            TCPStatus::LastAck => write!(f, "LASTACK"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SendParam {
+    pub unacked_seq: u32,
+    pub next: u32,
+    pub window: u16,
+    pub initial_seq: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecvParam {
+    pub next: u32,
+    pub window: u16,
+    pub initial_seq: u32,
+    pub tail: u32,
+}
 
 impl Socket {
-    pub fn new(local_addr: Ipv4Addr, remote_addr: Ipv4Addr, local_port: u16, remote_port: u16) -> Result<Self> {
+    pub fn new(local_addr: Ipv4Addr, remote_addr: Ipv4Addr, local_port: u16, remote_port: u16, status: TcpStatus) -> Result<Self> {
         let (sender, _) = transport::transport_channel(65535, TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::TCP)),)?;
         Ok(Self {
             local_addr,
@@ -33,6 +79,19 @@ impl Socket {
             local_port,
             remote_port,
             sender,
+            send_param: SendParam {
+                unacked_seq: 0,
+                initial_seq: 0,
+                next: 0,
+                window: SOCKET_BUFFER_SIZE as u16,
+            },
+            recv_param: RecvParam {
+                initial_seq: 0,
+                next: 0,
+                window: SOCKET_BUFFER_SIZE as u16,
+                tail: 0
+            },
+            status,
         })
     }
 
@@ -41,7 +100,21 @@ impl Socket {
         tcp_packet.set_src(self.local_port);
         tcp_packet.set_dest(self.remote_port);
         tcp_packet.set_flag(flag);
-        let sent_size = self.sender.send_to(tcp_packet.clone(), Ipv4Addr::V4(self.remote_addr)).unwrap();
+        tcp_packet.set_seq(seq);
+        tcp_packet.set_ack(ack);
+        tcp_packet.set_data_offset(5);
+        tcp_packet.set_window_size(self.recv_param.window);
+        tcp_paket.set_payload(payload);
+        tcp_packet.set_checksum(util::ipv4_checksum(
+            &tcp_packet.packet(),
+            8,
+            &[],
+            &self.local_addr,
+            &self.remote_addr,
+            IpNextHeaderProtocols::Tcp,
+        ));
+        let sent_size = self.sender.send_to(tcp_packet.clone(), Ipv4Addr::V4(self.remote_addr)).unwrap();.context(format!("failed to send: \n {:?}", tcp_packet))?;
+        dbg!("senf", &tcp_packet);
         Ok(sent_size)
     }
 
