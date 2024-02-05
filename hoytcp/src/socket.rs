@@ -23,6 +23,8 @@ pub struct Socket {
     pub send_param: SendParam,
     pub recv_param: RecvParam,
     pub status: TcpStatus,
+    pub connected_connection_queue: VecDeque<SockeID>,
+    pub listening_socket: Option<SockID>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -92,6 +94,8 @@ impl Socket {
                 tail: 0
             },
             status,
+            connected_connection_queue: VecDeque::new(),
+            listening_socket: None,
         })
     }
 
@@ -113,15 +117,15 @@ impl Socket {
             &self.remote_addr,
             IpNextHeaderProtocols::Tcp,
         ));
-        let sent_size = self.sender.send_to(tcp_packet.clone(), Ipv4Addr::V4(self.remote_addr)).unwrap();.context(format!("failed to send: \n {:?}", tcp_packet))?;
+        let sent_size = self.sender.send_to(tcp_packet.clone(), Ipv4Addr::V4(self.remote_addr)).unwrap().context(format!("failed to send: \n {:?}", tcp_packet))?;
         dbg!("senf", &tcp_packet);
         Ok(sent_size)
     }
 
-    pub gn get_sock_id(&self) -> SockID {
-        self.local_addr,
-        self.remote_addr,
-        self.local_port,
-        self.remote_port,
+    pub fn get_sock_id(&self) -> SockID {
+        self.local_addr;
+        self.remote_addr;
+        self.local_port;
+        self.remote_port;
     }
 }
