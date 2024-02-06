@@ -182,8 +182,9 @@ impl TCP {
 
             if let Err(error) = match socket.status {
                 TcpStatus::Listen => self.listen_handler(table. sock_id, &packet, remote_addr),
-                TcpStatus::SynRcvd => self.synrecv_handler(table, sock_id, &packet),
-                TcpStatus::SynSent => self.synsent_handler(socket, &packet), _ => {
+                TcpStatus::SynRcvd => self.synrcvd_handler(table, sock_id, &packet),
+                TcpStatus::SynSent => self.synsent_handler(socket, &packet),
+                TcpStatus::Established => self.established_handler(socket, &packet), _ => {
                     dbg!("not implemented state");
                     Ok(())
                 }
@@ -296,6 +297,50 @@ impl TCP {
                     self.publish_event(ls.get_sock_id(), TCPEventKind::ConnectionCompleted);
                 }
             }
+        Ok(())
+    }
+
+    pub fn send(&self, sock_id: SockID, buffer: &[u8]) -> Result<()> {
+        let mut cursor = 0;
+        while cursor < buffer.len() {
+            let mut table = self.sockets.write().unwrap();
+            let mut socket = table.get_mut(&sock_id).context(format!("no such socket: {:?}", sock_id))?;
+            let send_size = cmp::min(MSS, buffer.len() - cursor);
+
+            socket.send_tcp_packet(socket.send_param.next, socket.recv_param.next, tcpflags::ACK, &buffer[cursor..cursor + send_size],)?;
+            cursor += send_size;
+            socket.send_param.next += send_size as u32;
+        }
+        Ok(())
+    }
+
+    fn delete_acked_segment_from_retransmission_queue(&self, socket: &mut Socket) {
+        dbg!("ack accept", socket.send_param.unacked_seq);
+
+        while let Some(item) = socket.retransmission_queue.pop_front() {
+            if socket.send_param.unacked_seq > item.packet.get_seq() {
+                dbg!("successfully acked", item.packet.get_seq());
+                self.publish_event(socket.get_sock_id(), TCPEventKind::Acked);
+            } else {
+                socket.retransmission_queue.push_front(item);
+                break;
+            }
+        }
+    }
+
+    fn established_handler(&self, socket: &mut Socket, packet: &TCPPacket) -> Result<()> {
+        dbg!(established handler);
+
+        if socket.send_param.unacked_seq < packet.get_ack() && packet.get_ack() <= socket.send_param.next {
+            socket.send_param.unacked_seq = packet.get_ack();
+            self.delete_acked_segment_from_retransmission_queue(socket);
+        } else if socket.send_param.next < packet.get_ack() {
+            return Ok(());
+        }
+
+        if packet.get_flag() & tcpflags::ACK == 0 {
+            return Ok(());
+        }
         Ok(())
     }
 }

@@ -24,6 +24,7 @@ pub struct Socket {
     pub recv_param: RecvParam,
     pub status: TcpStatus,
     pub connected_connection_queue: VecDeque<SockeID>,
+    pub retransmission_queue: VecDeque<RestransmissionQueueEntry>,
     pub listening_socket: Option<SockID>,
 }
 
@@ -40,7 +41,7 @@ pub enum TcpStatus {
     LastAck,
 }
 
-impl Display for TacpStatus {
+impl Display for TcpStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TcpStatus::Listen => write!(f, "LISTEN"),
@@ -72,6 +73,23 @@ pub struct RecvParam {
     pub tail: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct RestransmissionQueueEntry {
+    pub packet: TCPPacket,
+    pub latest_transmission_time: SystemTime,
+    pub transmission_count: u8,
+}
+
+impl RestransmissionQueueEntry {
+    fn new(packet: TCPPacket) -> Self {
+        Self {
+            packet,
+            latest_transmission_time: SystemTime::now(),
+            transmission_count: 1,
+        }
+    }
+}
+
 impl Socket {
     pub fn new(local_addr: Ipv4Addr, remote_addr: Ipv4Addr, local_port: u16, remote_port: u16, status: TcpStatus) -> Result<Self> {
         let (sender, _) = transport::transport_channel(65535, TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::TCP)),)?;
@@ -95,6 +113,7 @@ impl Socket {
             },
             status,
             connected_connection_queue: VecDeque::new(),
+            retransmission_queue: VecDeque::new(),
             listening_socket: None,
         })
     }
@@ -119,6 +138,11 @@ impl Socket {
         ));
         let sent_size = self.sender.send_to(tcp_packet.clone(), Ipv4Addr::V4(self.remote_addr)).unwrap().context(format!("failed to send: \n {:?}", tcp_packet))?;
         dbg!("senf", &tcp_packet);
+
+        if payload.is_empty() && tcp_packet.get_flag() == tcpflags::ACK {
+            return Ok(sent_size);
+        }
+        self.retransmission_queue.push_back(RestransmissionQueueEntry::new(tcp_packet));
         Ok(sent_size)
     }
 
