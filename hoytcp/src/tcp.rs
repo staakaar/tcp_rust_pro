@@ -55,8 +55,57 @@ impl TCP {
         let cloned_tcp = tcp.clone();
         std::thread::spawn(move || {
             cloned_tcp.receive_handler().unwrap();
+
+            let clone_tcp = tcp.clone();
+            std::thread::spawn(move || {
+                clone_tcp.timer();
+            })
         });
         tcp
+    }
+
+    fn timer(&self) {
+        dbg!("begin timer thread");
+
+        loop {
+            let mut table = self.sockets.write().unwrap();
+            for (_, socket) in table.iter_mut() {
+                while let Some(mut item) = socket.retransmission_queue.pop_front() {
+                    /** 再キューからackされたセグメントを除去する
+                     * established state以外の時に送信されたセグメントを除去するために必要
+                     */
+                    if socket.send_param.unacked_seq > item.packet.get_seq() {
+                        dbg!("successfully acked", item.packet.get_seq());
+                        continue;
+                    }
+
+                    /** confirm timeout */
+                    if item.latest_transmission_time.elapsed().unwrap() < Duration::from_secs(RETRANSMITTION_TIMEOUT) {
+                        socket.retransmission_queue.push_front(item);
+                        break;
+                    }
+
+                    /** ackされていなければ再送 */
+                    if item.transmission_count < MAX_TRANSMITTION {
+                        dbg!("retransmit");
+                        socket.sender
+                            .send_to(item.packet.clone(), IpAddr::V4(socket.remote_addr))
+                            .context("failed to retransmit")
+                            .unwrap();
+                        
+                        item.transmission_count += 1;
+                        item.latest_transmission_time = SystemTime::now();
+                        socket.retransmission_queue.push_back(item);
+                        break;
+                    } else {
+                        dbg!("reached MAX_TRANSMITTION");
+                    }
+                }
+            }
+            /** ロックを外して待機する */
+            drop(table);
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     pub fn listen(&self, local_addr: Ipv4Addr, local_port: u16) -> Result<SockID> {
