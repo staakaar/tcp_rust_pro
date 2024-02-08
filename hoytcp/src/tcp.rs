@@ -69,13 +69,15 @@ impl TCP {
 
         loop {
             let mut table = self.sockets.write().unwrap();
-            for (_, socket) in table.iter_mut() {
+            for (socke_id, socket) in table.iter_mut() {
                 while let Some(mut item) = socket.retransmission_queue.pop_front() {
                     /** 再キューからackされたセグメントを除去する
                      * established state以外の時に送信されたセグメントを除去するために必要
                      */
                     if socket.send_param.unacked_seq > item.packet.get_seq() {
                         dbg!("successfully acked", item.packet.get_seq());
+                        socket.send_param.window += item.packet.payload().len() as u16;
+                        self.publish_event(*socke_id, TCPEventKind::Acked);
                         continue;
                     }
 
@@ -354,11 +356,26 @@ impl TCP {
         while cursor < buffer.len() {
             let mut table = self.sockets.write().unwrap();
             let mut socket = table.get_mut(&sock_id).context(format!("no such socket: {:?}", sock_id))?;
-            let send_size = cmp::min(MSS, buffer.len() - cursor);
+            let send_size = cmp::min(MSS, cmp::min(socket.send_param.window, buffer.len() - cursor));
+
+            while send_size == 0 {
+                dbg!("unable to slide send window");
+                drop(table);
+
+                self.wait_event(sock_id, TCPEventKind::Acked);
+                table.wait_event(sock_id, TCPEventKind::Acked);
+                socket = table.get_mut(&sock_id).context(format!("no such socket: {:?}", sock_id))?;
+                send_size = cmp::min(MSS, cmp::min(socket.send_param.window, buffer.len() - cursor));
+            }
+            dbg!("current window size", socket.send_param.window);
 
             socket.send_tcp_packet(socket.send_param.next, socket.recv_param.next, tcpflags::ACK, &buffer[cursor..cursor + send_size],)?;
             cursor += send_size;
             socket.send_param.next += send_size as u32;
+
+            socket.send_param.window -= send_size as u16;
+            drop(table);
+            thread::sleep(Duration::from_millis(1));
         }
         Ok(())
     }
@@ -369,6 +386,7 @@ impl TCP {
         while let Some(item) = socket.retransmission_queue.pop_front() {
             if socket.send_param.unacked_seq > item.packet.get_seq() {
                 dbg!("successfully acked", item.packet.get_seq());
+                socket.send_param.window += item.packet.payload().len() as u16;
                 self.publish_event(socket.get_sock_id(), TCPEventKind::Acked);
             } else {
                 socket.retransmission_queue.push_front(item);
