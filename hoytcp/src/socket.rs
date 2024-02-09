@@ -9,7 +9,7 @@ use std::fmt::{self, Display};
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::SystemTime;
 
-const SOCKET_BUFFER_SIZE = 4380;
+const SOCKET_BUFFER_SIZE: u32 = 4380;
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub struct SockID(pub Ipv4Addr, pub Ipv4Addr, pub u16, pub u16);
@@ -23,6 +23,7 @@ pub struct Socket {
     pub send_param: SendParam,
     pub recv_param: RecvParam,
     pub status: TcpStatus,
+    pub recv_buffer: Vec<u8>,
     pub connected_connection_queue: VecDeque<SockeID>,
     pub retransmission_queue: VecDeque<RestransmissionQueueEntry>,
     pub listening_socket: Option<SockID>,
@@ -112,13 +113,14 @@ impl Socket {
                 tail: 0
             },
             status,
+            recv_buffer: vec![0; SOCKET_BUFFER_SIZE],
             connected_connection_queue: VecDeque::new(),
             retransmission_queue: VecDeque::new(),
             listening_socket: None,
         })
     }
 
-    pub fn send_tcp_packet(&mut self, flag: u8, payload: &[u8]) -> Result<usize> {
+    pub fn send_tcp_packet(&mut self, flag: u8, payload: &[u8], tcp_status: string, options: &[u8]) -> Result<usize> {
         let mut tcp_packet = TCPPacket::new(payload.len());
         tcp_packet.set_src(self.local_port);
         tcp_packet.set_dest(self.remote_port);
