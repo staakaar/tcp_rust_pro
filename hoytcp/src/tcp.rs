@@ -78,6 +78,12 @@ impl TCP {
                         dbg!("successfully acked", item.packet.get_seq());
                         socket.send_param.window += item.packet.payload().len() as u16;
                         self.publish_event(*socke_id, TCPEventKind::Acked);
+
+                        if item.packet.get_flag() & tcpflags::FIN > 0
+                            && socket.status == TcpStatus::LastAck {
+                                self.publish_event(*socke_id, TCPEventKind::ConnectionClosed);
+                            }
+
                         continue;
                     }
 
@@ -101,6 +107,10 @@ impl TCP {
                         break;
                     } else {
                         dbg!("reached MAX_TRANSMITTION");
+                        if item.packet.get_flag() & tcpflags::FIN > 0
+                            && (socket.status == TcpStatus::LastAck || socket.status == TcpStatus::FinWait1 || socket.status == TcpStatus::FinWait2) {
+                                self.publish_event(*sock_id, TCPEventKind::ConnectionClosed);
+                            }
                     }
                 }
             }
